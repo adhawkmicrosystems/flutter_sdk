@@ -352,10 +352,11 @@ class BlinkPacket {
 class EyeOpenedPacket {
   static int get size => _struct.size;
 
-  static EyeOpenedEvent decode(Uint8List bytes) {
+  static EyeClosedOpenedEvent decode(Uint8List bytes) {
     var unpacked = _struct.unpackFrom(bytes);
-    return EyeOpenedEvent(
+    return EyeClosedOpenedEvent(
       eye: Eye.from(unpacked[1] as int),
+      opened: true,
     );
   }
 
@@ -366,10 +367,11 @@ class EyeOpenedPacket {
 class EyeClosedPacket {
   static int get size => _struct.size;
 
-  static EyeClosedEvent decode(Uint8List bytes) {
+  static EyeClosedOpenedEvent decode(Uint8List bytes) {
     var unpacked = _struct.unpackFrom(bytes);
-    return EyeClosedEvent(
+    return EyeClosedOpenedEvent(
       eye: Eye.from(unpacked[1] as int),
+      opened: false,
     );
   }
 

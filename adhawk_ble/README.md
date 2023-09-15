@@ -12,6 +12,8 @@ A flutter package for connecting to AdHawk BLE devices and collecting eyetrackin
     * Eye center
     * Pupil Diameter
     * Blink Events
+    * Eye Closed Events
+    * Eye Opened Events
   * Sensor
     * IMU Quaternion
 
@@ -179,10 +181,25 @@ See `BlinkEvent` in [api.dart](lib/adhawkapi/models/api.dart)
 ```dart
 BlocListener<TrackerBloc, TrackerState>(
   listener: (context, state) {
-    if (state.eventData == null) {
+    if (state.eventData is! BlinkEvent) {
       return;
     }
     print('Blink duration: ${state.eventData!.duration}');
+  }
+)
+```
+
+##### Monitor Eye Opened or Closed Events
+
+See `EyeClosedOpenedEvent` in [api.dart](lib/adhawkapi/models/api.dart)
+
+```dart
+BlocListener<TrackerBloc, TrackerState>(
+  listener: (context, state) {
+    if (state.eventData is! EyeClosedOpenedEvent) {
+      return;
+    }
+    print(state.eventData);
   }
 )
 ```
