@@ -476,14 +476,14 @@ class _EyelidState extends State<Eyelid> {
     /// height back to 0 (re-open the eye) after the blink duration.
     return BlocListener<TrackerBloc, TrackerState>(
       listener: (context, state) {
-        if (state.eventData == null) {
+        if (state.eventData is! BlinkEvent) {
           return;
         }
-        closeEye(state.eventData!.duration);
+        final blinkEvent = state.eventData! as BlinkEvent;
+        closeEye(blinkEvent.duration);
         _timer = Timer(
-            Duration(
-                milliseconds: _getAnimationDuration(state.eventData!.duration)),
-            () => openEye(state.eventData!.duration));
+            Duration(milliseconds: _getAnimationDuration(blinkEvent.duration)),
+            () => openEye(blinkEvent.duration));
       },
       child: Align(
           // align to top center so the blink animation moves downwards

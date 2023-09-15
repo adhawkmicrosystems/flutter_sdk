@@ -80,8 +80,8 @@ class TrackerState {
   /// The current [EyeTrackingData]
   final EyeTrackingData? etData;
 
-  /// Populated if a blink has just occurred
-  final BlinkEvent? eventData;
+  /// Populated if an eyetracking event was detected
+  final EventData? eventData;
 
   TrackerState.unavailable() : this(status: TrackerStatus.unavailable);
 
@@ -91,7 +91,7 @@ class TrackerState {
     String? serialNumber,
     String? firmwareVersion,
     EyeTrackingData? etData,
-    BlinkEvent? eventData,
+    EventData? eventData,
   }) =>
       TrackerState(
         status: status ?? this.status,
@@ -99,7 +99,7 @@ class TrackerState {
         serialNumber: serialNumber ?? this.serialNumber,
         firmwareVersion: firmwareVersion ?? this.firmwareVersion,
         etData: etData ?? this.etData,
-        eventData: eventData, // If a blink is not provided, it is set to null
+        eventData: eventData, // If an event is not provided, it is set to null
       );
 
   @override
@@ -147,6 +147,7 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
   };
   static const Set<EventControlBit> _enabledEvents = {
     EventControlBit.blink,
+    EventControlBit.eyeCloseOpen,
   };
 
   @override
@@ -242,7 +243,7 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
         }
       }),
       emit.forEach(_api.eventData, onData: (event) {
-        return state.copyWith(eventData: event as BlinkEvent);
+        return state.copyWith(eventData: event);
       }),
     ]);
   }

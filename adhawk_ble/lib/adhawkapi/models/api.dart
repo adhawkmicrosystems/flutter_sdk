@@ -319,16 +319,16 @@ class BlinkEvent extends EventData with UnixTimestamp {
   }
 }
 
-/// Eye closed event indicating that a specific eye is closed.
-class EyeClosedEvent extends EventData {
-  EyeClosedEvent({required this.eye});
+/// Event indicating that a specific eye just opened or closed.
+class EyeClosedOpenedEvent extends EventData {
+  EyeClosedOpenedEvent({required this.eye, required this.opened});
   final Eye eye;
-}
+  final bool opened;
 
-/// Eye open event indicating that a specific eye is opened.
-class EyeOpenedEvent extends EventData {
-  EyeOpenedEvent({required this.eye});
-  final Eye eye;
+  @override
+  toString() {
+    return 'Eye: $eye ${opened ? "opened" : "closed"}';
+  }
 }
 
 /// Gaze depth
