@@ -1,16 +1,14 @@
 import 'dart:io' show Platform;
 
+import 'package:adhawk_ble/bluetooth/repository/bluetooth_repository.dart';
+import 'package:adhawk_ble/bluetooth/service/scan_bloc.dart';
+import 'package:adhawk_ble_example/ui/widgets/device_list.dart';
+import 'package:adhawk_ble_example/ui/widgets/guards.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:permission_handler/permission_handler.dart';
-
-import 'package:adhawk_ble/bluetooth/service/device_bloc.dart';
-import 'package:adhawk_ble/bluetooth/service/scan_bloc.dart';
-import 'package:adhawk_ble/bluetooth/models/device.dart';
-import 'package:adhawk_ble/bluetooth/repository/bluetooth_repository.dart';
-import '../widgets/guards.dart';
 
 /// The [ConnectPage] creates and provides a [ScanBloc]
 /// A scan is triggered as soon as the [ScanBloc] is created
@@ -21,7 +19,7 @@ class ConnectPage extends StatelessWidget {
     return BlocProvider<ScanBloc>(
       create: (context) => ScanBloc(
         deviceRepo: context.read<BluetoothRepository>(),
-      ),
+      )..add(ScanStarted()),
       child: const ConnectGuards(),
     );
   }
@@ -60,8 +58,7 @@ class _ConnectGuardsState extends State<ConnectGuards> {
           rationale: 'We use Bluetooth to communicate with your glasses',
         ),
         ServiceGuard(
-          check: () async =>
-              (await Permission.bluetooth.serviceStatus.isEnabled),
+          check: () async => Permission.bluetooth.serviceStatus.isEnabled,
           alertDialog: const SystemSettingsAlertDialog(
             title: 'Turn on Bluetooth?',
             rationale: 'We use Bluetooth to communicate with your glasses',
@@ -72,8 +69,9 @@ class _ConnectGuardsState extends State<ConnectGuards> {
           // Use the generic ServiceGuard here instead of the PermissionGuard
           // because we need to check if location
           // is required as well as check if the permission is granted
-          check: () async => (!(await _isLocationRequired()) ||
-              (await Permission.location.request().isGranted)),
+          check: () async =>
+              !(await _isLocationRequired()) ||
+              (await Permission.location.request().isGranted),
           alertDialog: const SystemSettingsAlertDialog(
             title: 'Allow location?',
             rationale: 'We use location services to find nearby glasses',
@@ -81,8 +79,9 @@ class _ConnectGuardsState extends State<ConnectGuards> {
           ),
         ),
         ServiceGuard(
-          check: () async => (!(await _isLocationRequired()) ||
-              (await Permission.location.serviceStatus.isEnabled)),
+          check: () async =>
+              !(await _isLocationRequired()) ||
+              (await Permission.location.serviceStatus.isEnabled),
           alertDialog: const SystemSettingsAlertDialog(
             title: 'Turn on location?',
             rationale: 'We use location services to find nearby glasses',
@@ -107,63 +106,7 @@ class ConnectView extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Connect'),
       ),
-      body: BlocBuilder<ScanBloc, ScanState>(
-        builder: (context, state) {
-          return ListView.separated(
-            itemCount: state.devices.length,
-            separatorBuilder: (context, index) => const Divider(),
-            itemBuilder: (context, index) => DeviceTile(
-              device: state.devices[index],
-            ),
-          );
-        },
-      ),
+      body: const DeviceList(),
     );
-  }
-}
-
-class DeviceTile extends StatelessWidget {
-  const DeviceTile({super.key, required this.device});
-  final Device device;
-
-  @override
-  Widget build(BuildContext context) {
-    return BlocBuilder<DeviceBloc, DeviceState>(
-      builder: (context, state) {
-        DeviceBloc deviceBloc = context.read<DeviceBloc>();
-        return ListTile(
-            title: Text(device.name),
-            subtitle: Text(device.btInfo.description),
-            trailing: state.device == device
-                ? DeviceConnectivityIcon(state: state)
-                : const Icon(null),
-            onTap: () => (state.status == ConnectionStatus.disconnected ||
-                    state.status == ConnectionStatus.connected)
-                ? deviceBloc.add(DeviceConnectDisconnect(device))
-                : null);
-      },
-    );
-  }
-}
-
-class DeviceConnectivityIcon extends StatelessWidget {
-  const DeviceConnectivityIcon({
-    super.key,
-    required this.state,
-  });
-  final DeviceState state;
-
-  @override
-  Widget build(BuildContext context) {
-    switch (state.status) {
-      case ConnectionStatus.connected:
-        return const Icon(Icons.check);
-      case ConnectionStatus.connecting:
-      case ConnectionStatus.disconnecting:
-        return const CircularProgressIndicator();
-      case ConnectionStatus.init:
-      case ConnectionStatus.disconnected:
-        return const Icon(null);
-    }
   }
 }

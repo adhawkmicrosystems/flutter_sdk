@@ -1,244 +1,162 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:io' show Platform;
-
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:synchronized/synchronized.dart';
 
 import '../../logging/logging.dart';
-import '../models/device.dart';
 import '../models/bluetooth_characteristics.dart';
+import '../models/device.dart';
+import 'bluetooth_api.dart';
 
 class BluetoothRepository {
-  BluetoothRepository() : _readLock = Lock() {
-    FlutterBluePlus.setLogLevel(LogLevel.info);
+  BluetoothRepository({
+    required BluetoothApi api,
+    required int minReconnectDurationSecs,
+    required int maxReconnectDurationSecs,
+  })  : _api = api,
+        _minReconnectDurationSecs = Duration(seconds: minReconnectDurationSecs),
+        _maxReconnectDurationSecs =
+            Duration(seconds: maxReconnectDurationSecs) {
+    _statusSub = _api.getConnectionStatus().listen(_monitorConnectionStatus);
   }
-  final Lock _readLock;
+  final BluetoothApi _api;
+
+  final Duration _minReconnectDurationSecs;
+
+  final Duration _maxReconnectDurationSecs;
+
   final _logger = getLogger((BluetoothRepository).toString());
 
-  /// The currently paired device
-  BluetoothDevice? _pairedDevice;
+  /// The last connected device
+  Device? _device;
 
-  /// Subscription that monitors the state of the currently paired device
-  StreamSubscription<BluetoothConnectionState>? _btDeviceStateSub;
+  /// Current connection status
+  ConnectionStatus _status = ConnectionStatus.disconnected;
+
+  /// Listen for the status of devices
+  StreamSubscription<ConnectionStatusEvent>? _statusSub;
 
   /// Stream controller that broadcasts the state of the currently paired device
   final _connectionStatusController =
-      StreamController<ConnectionStatus>.broadcast();
+      StreamController<ConnectionStatusEvent>.broadcast();
 
-  /// The MTU required to receive et packets
-  static const mtu = 244;
+  /// A timer used to reconnect to the last connected device
+  Timer? _reconnectTimer;
 
-  /// A map to lookup the BluetoothCharacteristic object
-  /// of the connected device by the service uuid and characteristic uuid
-  final Map<Characteristic, BluetoothCharacteristic> _characteristics = {};
+  /// Number of reconnect attempts made since the last disconnect
+  int _reconnectAttempts = 0;
 
-  Future<void> dispose() async {
-    await _btDeviceStateSub?.cancel();
-    await _connectionStatusController.close();
+  // A function that finds what the reconnect duration should be based on an exponential backoff
+  Duration get _reconnectDuration {
+    final duration = _minReconnectDurationSecs * (1 << _reconnectAttempts);
+    if (duration > _maxReconnectDurationSecs) {
+      return _maxReconnectDurationSecs;
+    }
+    return duration;
   }
 
-  /// Get the currently connected [Device]
-  Future<Device?> getConnectedDevice() async {
-    final connectedDevices = (await FlutterBluePlus.connectedSystemDevices)
-        .where((e) => _validDevice(e));
-    if (connectedDevices.isEmpty) {
-      return null;
-    }
-    BluetoothDevice btDevice = connectedDevices.first;
-    await _initializeConnectedDevice(btDevice);
-    return _mapToDevice(btDevice);
+  Future<void> dispose() async {
+    await _statusSub?.cancel();
+    await _connectionStatusController.close();
   }
 
   /// Starts a bluetooth scan and generates a stream of [Device]s
   Stream<List<Device>> startScan() async* {
-    if (!FlutterBluePlus.isScanningNow) {
-      FlutterBluePlus.startScan(
-        withServices: [
-          Guid(AdhawkCharacteristics.serviceUuid),
-        ],
-      );
-    }
-    await for (List<ScanResult> results in FlutterBluePlus.scanResults) {
-      final connectedDevices = (await FlutterBluePlus.connectedSystemDevices)
-          .where((e) => _validDevice(e))
-          .map((e) => _mapToDevice(e));
-      // We can only be connected to a single valid device at a time
-      final connectedDevice =
-          connectedDevices.isEmpty ? null : connectedDevices.first;
-      final scanResults = results.map((e) => _mapToDevice(e.device));
-      // The scan results exhibit strange behavior in flutter_blue_plus:v1.14.11
-      // When connecting to a device in the scan result, the connected device only
-      // disappears from the results IF it was the only entry in the scan.
-      // To cover all cases, we check if the connected device is in the scan result
-      // if not, we add it to the list.
-      yield [
-        if (connectedDevice != null && !scanResults.contains(connectedDevice))
-          connectedDevice,
-        ...scanResults
-      ];
+    await for (final scanResult in _api.startScan()) {
+      yield {
+        if (_device != null && _status == ConnectionStatus.connected) _device!,
+        ...scanResult,
+      }.toList();
     }
   }
 
   /// Stops the scan for devices
-  void stopScan() async {
-    await FlutterBluePlus.stopScan();
+  Future<void> stopScan() async {
+    await _api.stopScan();
   }
 
   /// Connect to a [Device]
-  connect(Device device) async {
-    if (_pairedDevice != null) {
-      await disconnect(_mapToDevice(_pairedDevice!));
+  Future<void> connect(Device device) async {
+    try {
+      if (_device != null) {
+        await _api.disconnect(_device!);
+      }
+    } finally {
+      _device = device;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      await _api.connect(device);
     }
-    BluetoothDevice btDevice = _mapToBluetoothDevice(device);
-    await btDevice.connect(
-      timeout: const Duration(seconds: 15),
-      autoConnect: true, // Does not work on iOS: TRSW-8273
-    );
-    _pairedDevice = btDevice;
-    await _initializeConnectedDevice(btDevice);
   }
 
   /// Disconnect from the currently connected device
-  disconnect(Device device) async {
-    BluetoothDevice btDevice = _mapToBluetoothDevice(device);
-    await btDevice.disconnect();
-
-    // Only when the user explicitly disconnects from the device
-    // stop listening and clear characteristics
-    await _btDeviceStateSub?.cancel();
-    _pairedDevice = null;
-    _characteristics.clear();
+  Future<void> disconnect(Device device) async {
+    try {
+      await _api.disconnect(device);
+    } finally {
+      // We should disable the reconnect timer
+      // even if the disconnect fails
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _device = null;
+    }
   }
 
   /// Monitor the connection status of the currently connected device
-  Stream<ConnectionStatus> get connectionStatus async* {
+  Stream<ConnectionStatusEvent> get connectionStatus async* {
     yield* _connectionStatusController.stream;
   }
 
   Future<Uint8List> read(Characteristic characteristic) async {
-    var ch = _getCharacteristicInstance(characteristic);
-    if (!ch.properties.read) {
-      throw UnsupportedError(
-          'Read is not supported by this characteristic: $characteristic');
+    if (_device == null) {
+      throw BluetoothCommsException('Not connected to any bluetooth devices');
     }
-
-    return await _readLock
-        .synchronized(() async => Uint8List.fromList(await ch.read()));
+    return _api.read(characteristic);
   }
 
-  Future<void> write(Characteristic characteristic, Uint8List bytes) async {
-    var ch = _getCharacteristicInstance(characteristic);
-    if (ch.properties.write) {
-      throw UnsupportedError(
-          'Write is not supported by this characteristic: $characteristic');
+  Future<void> write(Characteristic characteristic, Uint8List bytes,
+      {bool withoutResponse = true}) async {
+    if (_device == null) {
+      throw BluetoothCommsException('Not connected to any bluetooth devices');
     }
-    await ch.write(bytes, withoutResponse: true);
-  }
-
-  Stream<Uint8List> getStream(Characteristic characteristic) {
-    var ch = _getNotifiableCharacteristic(characteristic);
-    return ch.onValueReceived.map(Uint8List.fromList);
+    return _api.write(characteristic, bytes, withoutResponse: withoutResponse);
   }
 
   Future<Stream<Uint8List>> startStream(Characteristic characteristic) async {
-    var ch = _getNotifiableCharacteristic(characteristic);
-    await _readLock.synchronized(() async => await ch.setNotifyValue(true));
-    return ch.onValueReceived.map(Uint8List.fromList);
+    if (_device == null) {
+      throw BluetoothCommsException('Not connected to any bluetooth devices');
+    }
+    return _api.startStream(characteristic);
   }
 
   Future<void> stopStream(Characteristic characteristic) async {
-    var ch = _getNotifiableCharacteristic(characteristic);
-    await _readLock.synchronized(() async => await ch.setNotifyValue(false));
+    if (_device == null) {
+      throw BluetoothCommsException('Not connected to any bluetooth devices');
+    }
+    await _api.stopStream(characteristic);
   }
 
-  Future<void> _initializeConnectedDevice(BluetoothDevice btDevice) async {
-    _btDeviceStateSub = btDevice.connectionState
-        .listen((state) => _monitorDeviceState(btDevice, state));
-  }
-
-  Future<void> _monitorDeviceState(
-      BluetoothDevice btDevice, BluetoothConnectionState state) async {
-    if (state == BluetoothConnectionState.connected) {
-      _logger.info('Initializing connected device ${btDevice.localName}');
-      if (!Platform.isIOS) {
-        await btDevice.requestMtu(mtu);
-      }
-      List<BluetoothService> services = await btDevice.discoverServices();
-      for (final service in services) {
-        for (final characteristic in service.characteristics) {
-          Characteristic key = Characteristic(
-              characteristic.uuid.toString(), service.uuid.toString());
-          _characteristics[key] = characteristic;
-          _logger.config(key.toString());
-        }
+  Future<void> _monitorConnectionStatus(ConnectionStatusEvent event) async {
+    _connectionStatusController.add(event);
+    final device = _device;
+    if (device != null && event.device.isSameBluetoothId(device)) {
+      _status = event.status;
+      if (event.status == ConnectionStatus.disconnected) {
+        _logger.info('$_device disconnected. Reconnect in $_reconnectDuration');
+        _reconnectTimer?.cancel();
+        _reconnectTimer = Timer(_reconnectDuration, onReconnectTimer);
       }
     }
-    // Emit the status after initialization is complete
-    _connectionStatusController.add(_mapToConnectionStatus(state));
   }
 
-  /// Get the BluetoothCharacteristic object from the [_characteristic] map
-  BluetoothCharacteristic _getCharacteristicInstance(
-      Characteristic characteristic) {
-    if (_pairedDevice == null) {
-      throw StateError('Not connected to any bluetooth devices');
-    }
-    var ch = _characteristics[characteristic];
-    if (ch == null) {
-      throw UnsupportedError(
-          'This device does not support characteristic: $characteristic');
-    }
-    return ch;
-  }
-
-  /// Get the notifiable bluetooth characteristic instance
-  BluetoothCharacteristic _getNotifiableCharacteristic(
-      Characteristic characteristic) {
-    BluetoothCharacteristic ch = _getCharacteristicInstance(characteristic);
-    if (!ch.properties.notify) {
-      throw UnsupportedError(
-          'Notify is not supported by this characteristic: $characteristic');
-    }
-    return ch;
-  }
-
-  /// Returns true if [BluetoothDevice] is an AdHawk device
-  static bool _validDevice(BluetoothDevice device) {
-    if (device.localName.contains(RegExp(r'AdHawk', caseSensitive: false))) {
-      return true;
-    }
-    return false;
-  }
-
-  /// Populate the [Device] model with fields from the flutter_blue [BluetoothDevice]
-  static Device _mapToDevice(BluetoothDevice btDevice) {
-    return Device(
-      name: btDevice.localName,
-      btInfo: BluetoothInformation(
-        id: btDevice.remoteId.toString(),
-        description: btDevice.remoteId.toString(),
-      ),
-    );
-  }
-
-  /// Create a [BluetoothDevice] instance from a [Device] object
-  static BluetoothDevice _mapToBluetoothDevice(Device device) {
-    return BluetoothDevice.fromId(device.btInfo.id, localName: device.name);
-  }
-
-  /// Convert [BluetoothConnectionState] to [ConnectionStatus]
-  static ConnectionStatus _mapToConnectionStatus(
-      BluetoothConnectionState state) {
-    // connecting and disconnecting are deprecated but still exist in the enum
-    // ignore: missing_enum_constant_in_switch
-    switch (state) {
-      case BluetoothConnectionState.connected:
-        return ConnectionStatus.connected;
-      case BluetoothConnectionState.disconnected:
-        return ConnectionStatus.disconnected;
-      default:
-        throw UnimplementedError('Unhandled bluetooth state: $state');
+  Future<void> onReconnectTimer() async {
+    if (_status != ConnectionStatus.connected && _device != null) {
+      _reconnectAttempts++;
+      try {
+        await _api.connect(_device!);
+        _reconnectAttempts = 0;
+      } on BluetoothConnectException {
+        // No need to do anything here. We should receive a disconnect event
+        // which resets the timer
+      }
     }
   }
 }

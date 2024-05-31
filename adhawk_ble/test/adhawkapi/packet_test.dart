@@ -1,42 +1,42 @@
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
 import 'package:adhawk_ble/adhawkapi/repository/api_packet.dart';
-import 'package:adhawk_ble/adhawkapi/repository/struct.dart';
 import 'package:adhawk_ble/adhawkapi/repository/packet.dart';
+import 'package:adhawk_ble/utilities/formatters.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Packet', () {
     test('Create a request packet with no payload', () {
-      var packet = RequestPacket(PacketType.trackerState);
-      var bytes = packet.encode();
-      var hexString = Struct.toHexString(bytes);
-      var re = RegExp('[a-z0-9]{4}(90)');
+      final packet = RequestPacket(PacketType.trackerState);
+      final bytes = packet.encode();
+      final hexString = bytes.toHexString();
+      final re = RegExp('[a-z0-9]{4}(90)');
       expect(re.hasMatch(hexString), true);
     });
 
     test('Create a request packet with payload', () {
-      var packet = RequestPacket(PacketType.trackerState, '<3B', [
+      final packet = RequestPacket(PacketType.trackerState, '<3B', [
         PacketType.systemControl.value,
         SystemControlTypes.tracking.value,
         1,
       ]);
-      var bytes = packet.encode();
-      var hexString = Struct.toHexString(bytes);
-      var re = RegExp('[a-z0-9]{4}9c0101');
+      final bytes = packet.encode();
+      final hexString = bytes.toHexString();
+      final re = RegExp('[a-z0-9]{4}9c0101');
       expect(re.hasMatch(hexString), true);
     });
 
     test('Parse a response packet', () {
-      var bytes = Uint8List.fromList([0x0d, 0x00, 0x90, 0x0d]);
-      var packet = ResponsePacket.fromBytes(bytes);
+      final bytes = Uint8List.fromList([0x0d, 0x00, 0x90, 0x0d]);
+      final packet = ResponsePacket.fromBytes(bytes);
       expect(packet.requestId, 0xd);
       expect(packet.packetType, PacketType.trackerState);
       expect(packet.ackCode, AckCode.hardwareFault);
     });
 
     test('Parse a stream packet', () {
-      var bytes = Uint8List.fromList([
+      final bytes = Uint8List.fromList([
         1,
         244,
         1,
@@ -82,7 +82,7 @@ void main() {
         99,
         64
       ]);
-      var packet = StreamPacket.fromBytes(bytes);
+      final packet = StreamPacket.fromBytes(bytes);
       expect(packet.packetType, PacketType.eyetrackingStream);
       expect(packet.payload, bytes.sublist(1));
     });

@@ -1,6 +1,6 @@
-/// This library provides the data structures streamed from the AdHawk eye tracker
-
-/// Most of the structures in this library refer to the AdHawk Coordinate System
+/// This file provides the data structures streamed from the AdHawk eye tracker
+///
+/// Most of the structures refer to the AdHawk Coordinate System
 /// In the AdHawk coordinate system X, Y and Z are coordinates relative to a particular origin where:
 /// * X is oriented in the positive direction to the right (user’s point of view)
 /// * Y is oriented in the positive direction going up
@@ -15,9 +15,9 @@
 /// | [Gaze]                                             | Midpoint of scanners |
 /// | [PupilPosition]                                    | Midpoint of scanners |
 /// | [PerEyeGaze]                                       | Center of eye        |
+library;
 
 import 'dart:math' as math;
-import 'defaults.dart';
 
 /// Enum referring to which Eye the data is coming from
 enum Eye {
@@ -46,7 +46,7 @@ class Coordinates {
   bool isValid() => [x, y, z].every((element) => element.isFinite);
 
   @override
-  toString() {
+  String toString() {
     return '($x, $y, $z)';
   }
 }
@@ -60,30 +60,43 @@ mixin UnixTimestamp {
   DateTime? _utctime;
 }
 
-/// Angle of the gaze vector
-class GazeAngles with UnixTimestamp {
-  final double yaw;
-  final double pitch;
+/// High resolution MCU timestamp since system start
+mixin McuTimestampInt64 {
+  int? timestamp;
+}
 
-  GazeAngles({required this.yaw, required this.pitch});
+/// Angle of the gaze vector
+class GazeAngles with UnixTimestamp, McuTimestampInt64 {
+  GazeAngles({required this.azRad, required this.elRad})
+      : azDeg = _toDegrees(azRad),
+        elDeg = _toDegrees(elRad);
 
   factory GazeAngles.fromGazeVector(Coordinates gaze) {
     return GazeAngles(
-        yaw: math.atan2(
+        azRad: math.atan2(
             gaze.x, math.sqrt(math.pow(gaze.y, 2) + math.pow(gaze.z, 2))),
-        pitch: math.atan2(gaze.y, -gaze.z));
+        elRad: math.atan2(gaze.y, -gaze.z));
   }
+
+  final double azRad;
+  final double elRad;
+  final double azDeg;
+  final double elDeg;
 
   Coordinates toGazeVector() {
     return Coordinates(
-        x: math.sin(yaw),
-        y: math.cos(yaw) * math.sin(pitch),
-        z: -math.cos(yaw) * math.cos(pitch));
+        x: math.sin(azRad),
+        y: math.cos(azRad) * math.sin(elRad),
+        z: -math.cos(azRad) * math.cos(elRad));
+  }
+
+  static double _toDegrees(double radians) {
+    return radians * 180 / math.pi;
   }
 }
 
 /// Coordinates of a users gaze unit vector relative to the midpoint of the scanners
-class Gaze with UnixTimestamp {
+class Gaze with UnixTimestamp, McuTimestampInt64 {
   Gaze({
     this.cyclopean = const Coordinates(z: -1),
     this.vergence = 0,
@@ -91,19 +104,19 @@ class Gaze with UnixTimestamp {
 
   static Coordinates calculateLeftAngle(
       Coordinates cyclopeanGaze, double vergence) {
-    GazeAngles avgAngles = GazeAngles.fromGazeVector(cyclopeanGaze);
+    final avgAngles = GazeAngles.fromGazeVector(cyclopeanGaze);
     return GazeAngles(
-      yaw: avgAngles.yaw + vergence * 0.5,
-      pitch: avgAngles.pitch,
+      azRad: avgAngles.azRad + vergence * 0.5,
+      elRad: avgAngles.elRad,
     ).toGazeVector();
   }
 
   static Coordinates calculateRightAngle(
       Coordinates cyclopeanGaze, double vergence) {
-    GazeAngles avgAngles = GazeAngles.fromGazeVector(cyclopeanGaze);
+    final avgAngles = GazeAngles.fromGazeVector(cyclopeanGaze);
     return GazeAngles(
-      yaw: avgAngles.yaw - vergence * 0.5,
-      pitch: avgAngles.pitch,
+      azRad: avgAngles.azRad - vergence * 0.5,
+      elRad: avgAngles.elRad,
     ).toGazeVector();
   }
 
@@ -132,13 +145,13 @@ class Gaze with UnixTimestamp {
   Coordinates? _left;
 
   @override
-  toString() {
+  String toString() {
     return 'Gaze [R: $right, L: $left, Vergence: $vergence]';
   }
 }
 
 /// Coordinates of a users gaze unit vector relative to the center of each eye
-class PerEyeGaze with UnixTimestamp {
+class PerEyeGaze with UnixTimestamp, McuTimestampInt64 {
   PerEyeGaze({
     this.right = const Coordinates(z: -1),
     this.left = const Coordinates(z: -1),
@@ -153,13 +166,13 @@ class PerEyeGaze with UnixTimestamp {
   final Coordinates left;
 
   @override
-  toString() {
+  String toString() {
     return 'PerEyeGaze [R: $right, L: $left]';
   }
 }
 
 /// Coordinates of the center of each eye relative to the midpoint of the scanners
-class EyeCenter with UnixTimestamp {
+class EyeCenter with UnixTimestamp, McuTimestampInt64 {
   EyeCenter({
     this.right = const Coordinates(z: -1),
     this.left = const Coordinates(z: -1),
@@ -174,13 +187,13 @@ class EyeCenter with UnixTimestamp {
   final Coordinates left;
 
   @override
-  toString() {
+  String toString() {
     return 'EyeCenter [R: $right, L: $left]';
   }
 }
 
 /// Coordinates of the pupil relative to the midpoint of the scanners
-class PupilPosition with UnixTimestamp {
+class PupilPosition with UnixTimestamp, McuTimestampInt64 {
   PupilPosition({
     this.right = const Coordinates(z: -1),
     this.left = const Coordinates(z: -1),
@@ -195,37 +208,24 @@ class PupilPosition with UnixTimestamp {
   final Coordinates left;
 
   @override
-  toString() {
+  String toString() {
     return 'PupilPosition [R: $right, L: $left]';
   }
 }
 
 /// The diameter of each pupil in millimeters
-class PupilDiameter with UnixTimestamp {
+class PupilDiameter with UnixTimestamp, McuTimestampInt64 {
   PupilDiameter({
-    this.right = Defaults.averagePupilSize,
-    this.left = Defaults.averagePupilSize,
+    this.right = 0,
+    this.left = 0,
   });
 
-  static const double _pupilExpandXBound = 0.55;
-  static const double _pupilExpandYUpBound = 0.10;
-  static const double _pupilExpandYLowBound = -0.5;
-
-  bool isOutOfBounds(Gaze gaze) {
-    double maxDistanceX = math.max(gaze.left.x.abs(), gaze.right.x.abs());
-    double maxDistanceY = math.max(gaze.left.y, gaze.right.y);
-    double minDistanceY = math.min(gaze.left.y, gaze.right.y);
-    if (maxDistanceX > _pupilExpandXBound ||
-        maxDistanceY > _pupilExpandYUpBound ||
-        minDistanceY < _pupilExpandYLowBound) {
-      return true;
-    } else {
-      return false;
-    }
-  }
-
   // Adjusted measurements for display purposes
-  double get adjusted => (right + left) / 2;
+  double adjusted(double minSize, double maxSize) {
+    final average = (right + left) / 2;
+    final clamped = average.clamp(minSize, maxSize);
+    return clamped;
+  }
 
   /// The coordinates of the right pupil in millimeters
   final double right;
@@ -237,7 +237,7 @@ class PupilDiameter with UnixTimestamp {
   bool isValid() => [right, left].every((element) => element.isFinite);
 
   @override
-  toString() {
+  String toString() {
     return 'PupilDiameter [R: $right, L: $left]';
   }
 }
@@ -245,7 +245,7 @@ class PupilDiameter with UnixTimestamp {
 /// The IMU data from the glasses in unit-norm quaternions
 ///
 /// See https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
-class IMUQuaternion {
+class IMUQuaternion with UnixTimestamp, McuTimestampInt64 {
   IMUQuaternion({
     this.x = 0,
     this.y = 0,
@@ -261,7 +261,7 @@ class IMUQuaternion {
   bool isValid() => [x, y, z, w].every((element) => element.isFinite);
 
   @override
-  toString() {
+  String toString() {
     return 'IMUQuaternion [X: $x, Y: $y, Z: $z, W: $w]';
   }
 }
@@ -290,13 +290,15 @@ class EyeTrackingData {
   IMUQuaternion imuQuaternion;
 
   @override
-  toString() {
+  String toString() {
     return '$gaze $perEyeGaze $eyeCenter $pupilPosition $pupilDiameter $imuQuaternion';
   }
 }
 
 /// Discrete events that were detected by the glasses
-sealed class EventData {}
+sealed class EventData with UnixTimestamp {
+  bool isValid() => true;
+}
 
 /// Blink events detected by the glasses
 ///
@@ -304,7 +306,7 @@ sealed class EventData {}
 /// More specifically, the blink event indicates the time window where both
 /// left and right blink events overlap in time.
 /// This event is triggered as soon as any of the closed eyes is opened.
-class BlinkEvent extends EventData with UnixTimestamp {
+class BlinkEvent extends EventData {
   BlinkEvent({required this.timestamp, required this.duration});
 
   /// Microcontroller timestamp since system start
@@ -314,7 +316,7 @@ class BlinkEvent extends EventData with UnixTimestamp {
   final double duration;
 
   @override
-  toString() {
+  String toString() {
     return 'Blink: $timestamp $duration ms';
   }
 }
@@ -326,23 +328,156 @@ class EyeClosedOpenedEvent extends EventData {
   final bool opened;
 
   @override
-  toString() {
+  String toString() {
     return 'Eye: $eye ${opened ? "opened" : "closed"}';
   }
 }
 
-/// Gaze depth
-class GazeDepth with UnixTimestamp {
-  GazeDepth({required this.timestamp, required this.z});
+/// Saccade events detected by the glasses
+///
+/// Combined-eye saccade event when a saccade is detected on both eyes.
+/// More specifically, the saccade event indicates the time window where both
+/// left and right saccade events overlap in time. This event is triggered as
+/// soon as the saccade in any of the eyes ends.
+class SaccadeEvent extends EventData {
+  SaccadeEvent({
+    required this.timestamp,
+    required this.duration,
+    required this.amplitude,
+    required this.angle,
+    required this.peakAngularVelocity,
+  });
 
-  /// MCU timestamp
+  /// Timestamp since system start of the event
   final double timestamp;
 
-  /// z coordinates of the gaze vector indicating depth
-  final double z;
+  /// Duration of the saccade in ms
+  final double duration;
+
+  /// Amplitude in deg
+  final double amplitude;
+
+  /// Angle in deg
+  final double angle;
+
+  /// Peak angular velocity in deg/s
+  final double peakAngularVelocity;
 
   @override
-  toString() {
-    return 'Gaze Depth: $timestamp $z m';
+  bool isValid() => [duration, amplitude, angle, peakAngularVelocity]
+      .every((element) => element.isFinite);
+
+  @override
+  String toString() {
+    return 'Saccade: $timestamp $duration ms, $amplitude deg, $angle deg,'
+        ' $peakAngularVelocity deg/s';
+  }
+}
+
+/// Saccade start events detected by the glasses on either eye
+class SaccadeStartEvent extends EventData {
+  SaccadeStartEvent({
+    required this.timestamp,
+    required this.eye,
+  });
+
+  /// Timestamp since system start of the event
+  final double timestamp;
+
+  /// Eye index specifying the eye
+  final Eye eye;
+
+  @override
+  String toString() {
+    return 'Saccade start: $timestamp $eye';
+  }
+}
+
+/// Saccade end events detected by the glasses on either eye
+class SaccadeEndEvent extends EventData {
+  SaccadeEndEvent({
+    required this.timestamp,
+    required this.eye,
+    required this.duration,
+    required this.amplitude,
+    required this.angle,
+    required this.peakAngularVelocity,
+  });
+
+  /// Timestamp since system start of the event
+  final double timestamp;
+
+  /// Eye index specifying the eye
+  final Eye eye;
+
+  /// Duration of the saccade in ms
+  final double duration;
+
+  /// Amplitude in deg
+  final double amplitude;
+
+  /// Angle in deg
+  final double angle;
+
+  /// Peak angular velocity in deg/s
+  final double peakAngularVelocity;
+
+  @override
+  String toString() {
+    return 'Saccade End: $timestamp $eye, $duration ms, $amplitude deg, '
+        '$angle deg, $peakAngularVelocity deg/s';
+  }
+}
+
+/// Trackloss start events detected by the glasses on either eye
+class TracklossStartEvent extends EventData {
+  TracklossStartEvent({
+    required this.timestamp,
+    required this.eye,
+  });
+
+  /// Timestamp since system start of the event
+  final double timestamp;
+
+  /// Eye index specifying the eye
+  final Eye eye;
+
+  @override
+  String toString() {
+    return 'Trackloss start: $timestamp $eye';
+  }
+}
+
+/// Trackloss end events detected by the glasses on either eye
+class TracklossEndEvent extends EventData {
+  TracklossEndEvent({
+    required this.timestamp,
+    required this.eye,
+  });
+
+  /// Timestamp since system start of the event
+  final double timestamp;
+
+  /// Eye index specifying the eye
+  final Eye eye;
+
+  @override
+  String toString() {
+    return 'Trackloss end: $timestamp $eye';
+  }
+}
+
+class DepthEvent extends EventData {
+  DepthEvent({required this.timestamp, required this.depth});
+
+  /// Microcontroller timestamp since system start
+  final double timestamp;
+
+  /// Depth in meters
+  final double depth;
+
+  @override
+  String toString() {
+    return 'Depth: $timestamp $depth m';
   }
 }

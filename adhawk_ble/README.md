@@ -7,12 +7,13 @@ A flutter package for connecting to AdHawk BLE devices and collecting eyetrackin
 
 * Scan for and connect to AdHawk BLE devices
 * Collect the following data from the glasses
-  * Eyetracking
+  * Eye tracking Streams
     * Gaze
     * Eye center
     * Pupil Diameter
+  * Eye tracking events
     * Blink Events
-    * Eye Closed Events
+    * Saccade Events
     * Eye Opened Events
   * Sensor
     * IMU Quaternion
@@ -53,14 +54,18 @@ You can enhance or modify the application.
 ### API
 
 Create the following:
-* `BluetoothRepository` - Perform BLE communication
-* `AdHawkApi` - Use the AdHawk protocol to encode commands and decode reponses and streams from the device
+* `BluetoothRepository` - Perform BLE communication using the provided [GATT Services](lib/bluetooth/models/bluetooth_characteristics.dart).
+* `AdHawkApi` - Use the [AdHawk protocol](lib/adhawkapi/repository/adhawkapi.dart) to encode commands and decode reponses and streams from the device
 
 ```dart
 MultiRepositoryProvider(
   providers: [
     RepositoryProvider(
-      create: (context) => BluetoothRepository(),
+      create: (context) => BluetoothRepository(
+          api: BluetoothApiFBP(),
+          minReconnectDurationSecs: 10,
+          maxReconnectDurationSecs: 180,
+        ),
     ),
     RepositoryProvider(
       create: (context) => AdHawkApi(
@@ -116,11 +121,11 @@ See [device_bloc.dart](lib/bluetooth/service/device_bloc.dart)
 BlocProvider(
   create: (context) => DeviceBloc(
     deviceRepo: context.read<BluetoothRepository>(),
-  )..add(DeviceCheckTriggered()),
+  )..add(DeviceMonitor()),
 ),
 
-// connect/disconnect to a device found in the scan
-context.read<DeviceBloc>().add(DeviceConnectDisconnect(device));
+// connect to a device found in the scan
+context.read<DeviceBloc>().add(DeviceActionTriggered(device, DeviceAction.connect));
 
 // Monitor connection status of the device
 BlocListener<DeviceBloc, DeviceState>(
@@ -150,7 +155,11 @@ BlocProvider(
 ),
 
 // Start communicating with the glasses
+// Enable receiving eye tracking events from the glasses
 context.read<CommsBloc>().add(StartComms());
+
+// Enable live streams from the glasses
+context.read<CommsBloc>().add(StreamStartStop(start: true));
 
 ```
 

@@ -53,6 +53,14 @@ class DeviceInformation extends StatelessWidget {
                   const SerialNumber(),
                   const FirmwareVersion(),
                   JustifiedText(
+                    left: 'Bluetooth FW version',
+                    right: state.firmwareVersion ?? '',
+                  ),
+                  JustifiedText(
+                    left: 'Hardware revision',
+                    right: state.hardwareRev ?? '',
+                  ),
+                  JustifiedText(
                     left: 'Bluetooth ID',
                     right: state.device!.btInfo.id,
                   ),

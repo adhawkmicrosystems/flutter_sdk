@@ -1,10 +1,11 @@
-import 'dart:typed_data';
+// ignore_for_file: discarded_futures
 
-import 'package:bloc_test/bloc_test.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:adhawk_ble/bluetooth/service/battery_bloc.dart';
+import 'dart:typed_data';
 import 'package:adhawk_ble/bluetooth/models/bluetooth_characteristics.dart';
 import 'package:adhawk_ble/bluetooth/repository/bluetooth_repository.dart';
+import 'package:adhawk_ble/bluetooth/service/battery_bloc.dart';
+import 'package:bloc_test/bloc_test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 class MockRepository extends Mock implements BluetoothRepository {}
@@ -13,21 +14,19 @@ void main() {
   group('BatteryBloc', () {
     late MockRepository mockRepo;
     late BatteryBloc bloc;
-    final Characteristic ch =
-        BatteryCharacteristics.batteryLevel.characteristic;
+    final ch = BatteryCharacteristics.batteryLevel.characteristic;
 
     setUp(() {
       mockRepo = MockRepository();
       bloc = BatteryBloc(deviceRepo: mockRepo);
     });
 
-    tearDown(() {
-      bloc.close();
+    tearDown(() async {
+      await bloc.close();
     });
 
     test('Verify initial state', () {
-      expect(bloc.state,
-          const BatteryState(status: BatteryStatus.unknown, level: 0));
+      expect(bloc.state, BatteryState(status: BatteryStatus.unknown, level: 0));
     });
 
     blocTest<BatteryBloc, BatteryState>(
@@ -45,7 +44,9 @@ void main() {
         verify(() => mockRepo.startStream(ch)).called(1);
       },
       expect: () => [
-        const BatteryState(status: BatteryStatus.ok, level: 80),
+        const TypeMatcher<BatteryState>()
+            .having((state) => state.status, 'status', equals(BatteryStatus.ok))
+            .having((state) => state.level, 'level', equals(80)),
       ],
     );
 
@@ -53,11 +54,11 @@ void main() {
       'Monitor battery levels on [BatteryMonitorToggled] on event',
       setUp: () {
         when(() => mockRepo.read(ch))
-            .thenAnswer((_) => Future.value(Uint8List.fromList([21])));
+            .thenAnswer((_) => Future.value(Uint8List.fromList([31])));
         when(() => mockRepo.startStream(ch))
             .thenAnswer((_) => Future.value(Stream.fromIterable([
-                  Uint8List.fromList([20]),
-                  Uint8List.fromList([19]),
+                  Uint8List.fromList([30]),
+                  Uint8List.fromList([29]),
                 ])));
       },
       build: () => bloc,
@@ -67,24 +68,31 @@ void main() {
         verify(() => mockRepo.startStream(ch)).called(1);
       },
       expect: () => [
-        const BatteryState(status: BatteryStatus.ok, level: 21),
-        const BatteryState(status: BatteryStatus.ok, level: 20),
-        const BatteryState(status: BatteryStatus.low, level: 19)
+        const TypeMatcher<BatteryState>()
+            .having((state) => state.status, 'status', equals(BatteryStatus.ok))
+            .having((state) => state.level, 'level', equals(31)),
+        const TypeMatcher<BatteryState>()
+            .having((state) => state.status, 'status', equals(BatteryStatus.ok))
+            .having((state) => state.level, 'level', equals(30)),
+        const TypeMatcher<BatteryState>()
+            .having(
+                (state) => state.status, 'status', equals(BatteryStatus.low))
+            .having((state) => state.level, 'level', equals(29)),
       ],
     );
     blocTest<BatteryBloc, BatteryState>(
       'Stop monitoring battery levels on [BatteryMonitorToggled] off event',
       build: () => bloc,
-      seed: () => const BatteryState(status: BatteryStatus.ok, level: 80),
+      seed: () => BatteryState(status: BatteryStatus.ok, level: 80),
       act: (bloc) {
         bloc.add(BatteryMonitorToggled(on: false));
       },
       verify: (_) {
         verifyNever(() => mockRepo.read(ch));
-        verifyNever(() => mockRepo.getStream(ch));
+        verifyNever(() => mockRepo.startStream(ch));
       },
       expect: () => [
-        const BatteryState(status: BatteryStatus.unknown, level: 0),
+        BatteryState(status: BatteryStatus.unknown, level: 0),
       ],
     );
   });

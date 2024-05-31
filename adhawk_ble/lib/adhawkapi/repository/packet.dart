@@ -1,8 +1,9 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../../utilities/formatters.dart';
+import '../../utilities/struct.dart';
 import 'api_packet.dart';
-import 'struct.dart';
 
 bool usePrefixPackets = false;
 
@@ -12,20 +13,20 @@ bool usePrefixPackets = false;
 /// It is controlled by [usePrefixPackets]. It can be enabled/disabled until
 /// we understand performance implications
 class PacketPrefix {
-  PacketPrefix(this.payloadLength, this.isStream);
+  PacketPrefix(this.payloadLength, {required this.isStream});
 
   factory PacketPrefix.fromBytes(Uint8List bytes) {
-    var unpacked = _headerStruct.unpackFrom(bytes);
-    var sop = unpacked[0] as int;
-    var header = unpacked[1] as int;
+    final unpacked = _headerStruct.unpackFrom(bytes);
+    final sop = unpacked[0] as int;
+    final header = unpacked[1] as int;
     if (sop != _sop) {
       throw FormatException('Invalid packet received: incorrect SOP: $sop');
     }
-    int length = header & _lengthMask;
-    int isStream = header & (1 << _streamBitOffset);
+    final length = header & _lengthMask;
+    final isStream = header & (1 << _streamBitOffset);
     return PacketPrefix(
       length,
-      isStream == 0 ? false : true,
+      isStream: isStream != 0,
     );
   }
 
@@ -40,7 +41,7 @@ class PacketPrefix {
 
   /// Wraps the payload and encodes the packet
   Uint8List encode() {
-    int header = 0;
+    var header = 0;
     header |= (isStream ? 1 : 0) << _streamBitOffset;
     header |= payloadLength;
     return _headerStruct.pack([_sop, header]);
@@ -79,19 +80,19 @@ class RequestPacket {
 
   /// Encode the request packet
   Uint8List encode() {
-    var payloadStruct = payloadFormat != null ? Struct(payloadFormat!) : null;
-    var packetLength = _headerStruct.size + (payloadStruct?.size ?? 0);
+    final payloadStruct = payloadFormat != null ? Struct(payloadFormat!) : null;
+    final packetLength = _headerStruct.size + (payloadStruct?.size ?? 0);
 
-    var header = _headerStruct.pack([requestId, packetType.value]);
+    final header = _headerStruct.pack([requestId, packetType.value]);
 
-    var builder = BytesBuilder();
+    final builder = BytesBuilder();
     if (usePrefixPackets) {
-      builder.add(PacketPrefix(packetLength, false).encode());
+      builder.add(PacketPrefix(packetLength, isStream: false).encode());
     }
 
     builder.add(header);
     if (payloadStruct != null && payload != null) {
-      var payloadBytes = payloadStruct.pack(payload!);
+      final payloadBytes = payloadStruct.pack(payload!);
       builder.add(payloadBytes);
     }
     return builder.toBytes();
@@ -121,10 +122,10 @@ class ResponsePacket {
         prefix.payloadLength,
       );
     }
-    var unpacked = _headerStruct.unpackFrom(bytes);
-    var requestId = unpacked[0] as int;
-    var packetType = PacketType.from(unpacked[1] as int);
-    var ackCode = AckCode.from(unpacked[2] as int);
+    final unpacked = _headerStruct.unpackFrom(bytes);
+    final requestId = unpacked[0] as int;
+    final packetType = PacketType.from(unpacked[1] as int);
+    final ackCode = AckCode.from(unpacked[2] as int);
     return ResponsePacket._(
       requestId,
       packetType,
@@ -151,7 +152,7 @@ class ResponsePacket {
 
   @override
   String toString() {
-    return 'ReqID=$requestId $packetType ${Struct.toHexString(payload)}';
+    return 'ReqID=$requestId $packetType ${payload.toHexString()}';
   }
 
   /// Header format
@@ -173,8 +174,8 @@ class StreamPacket {
         prefix.payloadLength,
       );
     }
-    var unpacked = _headerStruct.unpackFrom(bytes);
-    var packetType = PacketType.from(unpacked[0] as int);
+    final unpacked = _headerStruct.unpackFrom(bytes);
+    final packetType = PacketType.from(unpacked[0] as int);
     return StreamPacket._(
       packetType,
       Uint8List.sublistView(
@@ -199,7 +200,7 @@ class StreamPacket {
 
   @override
   String toString() {
-    return '$packetType: ${Struct.toHexString(payload)}';
+    return '$packetType: ${payload.toHexString()}';
   }
 
   /// Header format

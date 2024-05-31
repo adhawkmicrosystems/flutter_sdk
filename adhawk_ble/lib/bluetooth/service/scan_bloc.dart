@@ -2,12 +2,14 @@
 ///
 /// The [ScanState] reflects the current [ScanStatus] and provides a list of AdHawk
 /// [Device]s in the vicinity
+library;
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../logging/logging.dart';
-import '../repository/bluetooth_repository.dart';
 import '../models/device.dart';
+import '../repository/bluetooth_api.dart';
+import '../repository/bluetooth_repository.dart';
 
 ///  Scan Events
 abstract class ScanEvent {}
@@ -33,7 +35,7 @@ class ScanState {
 
   @override
   String toString() {
-    return '${status.toString()} (devices: ${devices.length})';
+    return '$status (devices: ${devices.length})';
   }
 }
 
@@ -43,38 +45,17 @@ class ScanBloc extends Bloc<ScanEvent, ScanState> {
   ScanBloc({required BluetoothRepository deviceRepo})
       : _deviceRepo = deviceRepo,
         super(const ScanState()) {
-    on<ScanStarted>((event, emit) async {
-      try {
-        if (state.status == ScanStatus.scanning) {
-          return;
-        }
-        Stream<List<Device>> deviceStream = _deviceRepo.startScan();
-        emit(const ScanState(status: ScanStatus.scanning));
-        await emit.forEach(deviceStream, onData: (devices) {
-          return ScanState(status: ScanStatus.success, devices: devices);
-        });
-      } catch (error) {
-        emit(const ScanState(status: ScanStatus.failure, devices: []));
-      }
-    });
-
-    on<ScanStopped>((event, emit) {
-      try {
-        if (state.status == ScanStatus.stopped) {
-          return;
-        }
-        _deviceRepo.stopScan();
-        emit(const ScanState(status: ScanStatus.stopped, devices: []));
-      } catch (error) {
-        emit(const ScanState(status: ScanStatus.failure, devices: []));
-      }
-    });
+    on<ScanStarted>(_onScanStarted);
+    on<ScanStopped>(_onScanStopped);
   }
+
+  final BluetoothRepository _deviceRepo;
+  final _logger = getLogger((ScanBloc).toString());
 
   @override
   Future<void> close() async {
     if (state.status != ScanStatus.stopped) {
-      add(ScanStopped());
+      await _deviceRepo.stopScan();
     }
     await super.close();
   }
@@ -87,6 +68,30 @@ class ScanBloc extends Bloc<ScanEvent, ScanState> {
     }
   }
 
-  final BluetoothRepository _deviceRepo;
-  final _logger = getLogger((ScanBloc).toString());
+  Future<void> _onScanStarted(ScanEvent event, Emitter<ScanState> emit) async {
+    try {
+      if (state.status == ScanStatus.scanning) {
+        return;
+      }
+      final deviceStream = _deviceRepo.startScan();
+      emit(const ScanState(status: ScanStatus.scanning));
+      await emit.forEach(deviceStream, onData: (devices) {
+        return ScanState(status: ScanStatus.success, devices: devices);
+      });
+    } on BluetoothScanException {
+      emit(const ScanState(status: ScanStatus.failure));
+    }
+  }
+
+  Future<void> _onScanStopped(ScanEvent event, Emitter<ScanState> emit) async {
+    try {
+      if (state.status == ScanStatus.stopped) {
+        return;
+      }
+      await _deviceRepo.stopScan();
+      emit(const ScanState());
+    } on BluetoothScanException catch (e) {
+      _logger.warning(e);
+    }
+  }
 }
