@@ -1,6 +1,7 @@
 import 'package:adhawk_ble/adhawkapi/repository/adhawkapi.dart';
 import 'package:adhawk_ble/adhawkapi/service/tracker_bloc.dart';
 import 'package:adhawk_ble/bluetooth/models/device.dart';
+import 'package:adhawk_ble/bluetooth/repository/bluetooth_api_fbp.dart';
 import 'package:adhawk_ble/bluetooth/repository/bluetooth_repository.dart';
 import 'package:adhawk_ble/bluetooth/service/battery_bloc.dart';
 import 'package:adhawk_ble/bluetooth/service/device_bloc.dart';
@@ -22,7 +23,11 @@ class MyApp extends StatelessWidget {
     return MultiRepositoryProvider(
       providers: [
         RepositoryProvider(
-          create: (context) => BluetoothRepository(),
+          create: (context) => BluetoothRepository(
+            api: BluetoothApiFBP(),
+            minReconnectDurationSecs: 10,
+            maxReconnectDurationSecs: 180,
+          ),
         ),
         RepositoryProvider(
           create: (context) => AdHawkApi(
@@ -35,7 +40,7 @@ class MyApp extends StatelessWidget {
           BlocProvider(
             create: (context) => DeviceBloc(
               deviceRepo: context.read<BluetoothRepository>(),
-            )..add(DeviceCheckTriggered()),
+            )..add(DeviceMonitor()),
           ),
           BlocProvider(
             create: (context) => BatteryBloc(
@@ -58,6 +63,7 @@ class MyApp extends StatelessWidget {
                 BatteryBloc battery = context.read<BatteryBloc>();
                 if (state.status == ConnectionStatus.connected) {
                   comms.add(StartComms());
+                  comms.add(StreamStartStop(start: true));
                   battery.add(BatteryMonitorToggled(on: true));
                 } else if (state.status == ConnectionStatus.disconnected) {
                   comms.add(StopComms());

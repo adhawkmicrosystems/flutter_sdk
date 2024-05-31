@@ -4,10 +4,12 @@
 /// The commands are passed to the glasses over Bluetooth.
 /// The result of the commands are reflected in the [TrackerState]
 /// The [TrackerState] also contains the current [EyeTrackingData]
+library;
+
+import 'dart:async';
 
 import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-
 import '../../logging/logging.dart';
 import '../models/api.dart';
 import '../repository/adhawkapi.dart';
@@ -24,17 +26,22 @@ sealed class TrackerCommand implements TrackerEvent {}
 /// This must be called before any other commands are issued to the tracker
 final class StartComms implements TrackerCommand {}
 
+/// Start the personalization process
+final class PersonalizeTracker implements TrackerCommand {}
+
 /// Calibrate the tracker for a particular user
 final class UserCalibration implements TrackerCommand {}
 
 /// Stop communication with the eye tracker
 final class StopComms implements TrackerCommand {}
 
-/// Monitoring commands issued to the tracker
-sealed class _TrackerMonitor implements TrackerEvent {}
+/// Streaming commands issued to the tracker
+final class StreamStartStop implements TrackerEvent {
+  StreamStartStop({required this.start});
 
-/// Start streaming data from the tracker
-final class _StartStreams implements _TrackerMonitor {}
+  /// Whether to start or stop streams
+  final bool start;
+}
 
 /// The currenct operating status of the tracker
 enum TrackerStatus {
@@ -43,6 +50,9 @@ enum TrackerStatus {
 
   /// The tracker is active and tracking
   active,
+
+  /// The tracker is being personalized
+  personalizing,
 
   /// The tracker is currently being tuned
   tuning,
@@ -58,12 +68,19 @@ enum TrackerStatus {
 class TrackerState {
   TrackerState({
     required this.status,
+    required this.streaming,
     this.statusMessage = '',
     this.serialNumber = '',
     this.firmwareVersion = '',
     this.etData,
     this.eventData,
   });
+
+  TrackerState.unavailable()
+      : this(
+          status: TrackerStatus.unavailable,
+          streaming: false,
+        );
 
   /// The operating status of the tracker
   final TrackerStatus status;
@@ -83,10 +100,12 @@ class TrackerState {
   /// Populated if an eyetracking event was detected
   final EventData? eventData;
 
-  TrackerState.unavailable() : this(status: TrackerStatus.unavailable);
+  /// Whether we're streaming live data
+  final bool streaming;
 
   TrackerState copyWith({
     TrackerStatus? status,
+    bool? streaming,
     String? statusMessage,
     String? serialNumber,
     String? firmwareVersion,
@@ -95,6 +114,7 @@ class TrackerState {
   }) =>
       TrackerState(
         status: status ?? this.status,
+        streaming: streaming ?? this.streaming,
         statusMessage: statusMessage ?? this.statusMessage,
         serialNumber: serialNumber ?? this.serialNumber,
         firmwareVersion: firmwareVersion ?? this.firmwareVersion,
@@ -104,7 +124,7 @@ class TrackerState {
 
   @override
   String toString() {
-    return '${status.toString()} (serialNumber: $serialNumber)';
+    return '$status (serialNumber: $serialNumber)';
   }
 }
 
@@ -113,6 +133,8 @@ enum ErrorMsg {
   apiStartFailures('Failed to start communication'),
   apiStopFailures('Failed to stop communication'),
   enableStreamFailure('Failed to start eyetracking streams'),
+  disableStreamFailure('Failed to stop eyetracking streams'),
+  personalizationFailure('Failed to personalize the glasses'),
   userCalibrationFailure('User calibration failed'),
   ;
 
@@ -133,8 +155,7 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
       : _api = api,
         super(TrackerState.unavailable()) {
     on<TrackerCommand>(_handleTrackerCommandEvents, transformer: restartable());
-    on<_TrackerMonitor>(_handleTrackerMonitorEvents,
-        transformer: restartable());
+    on<StreamStartStop>(_handleTrackerStreamEvents, transformer: restartable());
   }
 
   final AdHawkApi _api;
@@ -147,7 +168,7 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
   };
   static const Set<EventControlBit> _enabledEvents = {
     EventControlBit.blink,
-    EventControlBit.eyeCloseOpen,
+    EventControlBit.saccade,
   };
 
   @override
@@ -167,6 +188,8 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
     switch (event) {
       case StartComms():
         await _handleStartComms(event, emit);
+      case PersonalizeTracker():
+        await _handlePersonalization(event, emit);
       case UserCalibration():
         await _handleUserCalibration(event, emit);
       case StopComms():
@@ -174,49 +197,53 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
     }
   }
 
-  Future<void> _handleTrackerMonitorEvents(
-      _TrackerMonitor event, Emitter<TrackerState> emit) async {
-    switch (event) {
-      case _StartStreams():
-        await _handleStartStream(event, emit);
+  Future<void> _handleTrackerStreamEvents(
+      StreamStartStop event, Emitter<TrackerState> emit) async {
+    if (event.start) {
+      await _handleStartStreams(event, emit);
+    } else {
+      await _handleStopStreams(event, emit);
     }
   }
 
-  Future<void> _handleStartComms(event, emit) async {
+  Future<void> _handleStartComms(event, Emitter<TrackerState> emit) async {
     _logger.info('Start tracker communication');
     try {
       await _api.start();
-      await _api.setTracking(true);
-      String serialNumber = await _getSerialNumber();
-      String firmwareVersion = '';
+      final serialNumber = await _getSerialNumber();
+      var firmwareVersion = '';
       try {
         firmwareVersion = await _getFirmwareVersion();
-      } catch (_) {
+      } on Exception {
         // We don't strictly need the firmware version for operation
         // This is a workaround for TRSW-8107
       }
+      await _api.setEvents(eventTypes: _enabledEvents, enable: true);
       emit(TrackerState(
         status: TrackerStatus.active,
         serialNumber: serialNumber,
         firmwareVersion: firmwareVersion,
+        streaming: false,
       ));
-    } on Exception catch (e) {
+    } on CommsException catch (e) {
+      emit(_handleDeviceDisconnected(e));
+    } on TrackerException catch (e) {
       emit(_handleError(ErrorMsg.apiStartFailures, e));
     }
-    add(_StartStreams());
   }
 
   Future<String> _getFirmwareVersion() async {
-    var res = await _api.getSystemInformation(SystemInfoTypes.firmwareVersion);
+    final res =
+        await _api.getSystemInformation(SystemInfoTypes.firmwareVersion);
     return SystemInfoPacket.decode(res.payload);
   }
 
   Future<String> _getSerialNumber() async {
-    var res = await _api.getSystemInformation(SystemInfoTypes.deviceSerial);
+    final res = await _api.getSystemInformation(SystemInfoTypes.deviceSerial);
     return SystemInfoPacket.decode(res.payload);
   }
 
-  Future<void> _handleStopComms(event, emit) async {
+  Future<void> _handleStopComms(event, Emitter<TrackerState> emit) async {
     _logger.info('Stop tracker communication');
     try {
       await _api.stop();
@@ -226,26 +253,81 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
     }
   }
 
-  Future<void> _handleStartStream(event, Emitter<TrackerState> emit) async {
-    _logger.info('Start eyetracking and event streams');
+  Future<void> _handleStartStreams(event, Emitter<TrackerState> emit) async {
+    _logger.info('Start eyetracking streams');
     try {
-      await _api.setEyetrackingRate(60);
-      await _api.setEyetrackingStreams(_enabledStreams, true);
-      await _api.setEvents(_enabledEvents, true);
-    } on Exception catch (e) {
+      await _api.setEyetrackingStreams(
+        streamTypes: _enabledStreams,
+        enable: true,
+      );
+    } on CommsException catch (e) {
+      emit(_handleDeviceDisconnected(e));
+      return;
+    } on TrackerException catch (e) {
       emit(_handleError(ErrorMsg.enableStreamFailure, e));
+      return;
     }
+    emit(state.copyWith(streaming: true));
     // Setup the emitters
     await Future.wait([
       emit.onEach(_api.etData, onData: (etData) {
         if (etData.perEyeGaze.isValid() && etData.pupilDiameter.isValid()) {
-          emit(state.copyWith(etData: etData, eventData: null));
+          final utcTime = DateTime.now();
+          etData
+            ..gaze.utctime = utcTime
+            ..perEyeGaze.utctime = utcTime
+            ..eyeCenter.utctime = utcTime
+            ..pupilPosition.utctime = utcTime
+            ..pupilDiameter.utctime = utcTime;
+          emit(state.copyWith(etData: etData));
         }
       }),
-      emit.forEach(_api.eventData, onData: (event) {
-        return state.copyWith(eventData: event);
+      emit.onEach(_api.eventData, onData: (event) {
+        final utcTime = DateTime.now();
+        event.utctime = utcTime;
+        if (event.isValid()) {
+          emit(state.copyWith(eventData: event));
+        }
       }),
     ]);
+  }
+
+  Future<void> _handleStopStreams(event, Emitter<TrackerState> emit) async {
+    _logger.info('Stop eyetracking streams');
+    try {
+      await _api.setEyetrackingStreams(
+        streamTypes: _enabledStreams,
+        enable: false,
+      );
+      emit(state.copyWith(streaming: false));
+      // Don't disable any events. They still need to be recorded by NRF.
+    } on CommsException catch (e) {
+      emit(_handleDeviceDisconnected(e));
+      return;
+    } on TrackerException catch (e) {
+      emit(_handleError(ErrorMsg.disableStreamFailure, e));
+      return;
+    }
+  }
+
+  Future<void> _handlePersonalization(event, Emitter<TrackerState> emit) async {
+    try {
+      emit(state.copyWith(status: TrackerStatus.personalizing));
+      await _api.waitForTrackerReady(() async {
+        await _api.clearBlob(BlobType.personalization);
+      });
+      emit(state.copyWith(status: TrackerStatus.active));
+    } on CommsException catch (e) {
+      emit(_handleDeviceDisconnected(e));
+    } on TrackerException catch (e) {
+      if (e is RequestFailedException &&
+          e.packet.ackCode == AckCode.invalidArgument) {
+        // older firmware might not support the personalization blob
+        emit(state.copyWith(status: TrackerStatus.active));
+      } else {
+        emit(_handleError(ErrorMsg.personalizationFailure, e));
+      }
+    }
   }
 
   Future<void> _handleUserCalibration(event, Emitter<TrackerState> emit) async {
@@ -255,9 +337,18 @@ class TrackerBloc extends Bloc<TrackerEvent, TrackerState> {
       emit(state.copyWith(status: TrackerStatus.calibrating));
       await _api.singlePointCalibration();
       emit(state.copyWith(status: TrackerStatus.active));
-    } on Exception catch (e) {
+    } on CommsException catch (e) {
+      emit(_handleDeviceDisconnected(e));
+    } on TrackerException catch (e) {
       emit(_handleError(ErrorMsg.userCalibrationFailure, e));
     }
+  }
+
+  TrackerState _handleDeviceDisconnected(Exception e) {
+    _logger.warning('$e');
+    return state.copyWith(
+        status: TrackerStatus.unavailable,
+        statusMessage: 'Device disconnected');
   }
 
   TrackerState _handleError(ErrorMsg msg, Exception e) {

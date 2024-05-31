@@ -28,6 +28,16 @@ class Device extends Equatable {
   final String name;
   final BluetoothInformation btInfo;
 
+  /// Use this check when verifying it is the same physical device
+  /// as sometimes the device name might not be populated by flutter_blue_plus
+  bool isSameBluetoothId(Device other) => btInfo.id == other.btInfo.id;
+
   @override
   List<Object?> get props => [name, btInfo];
+}
+
+class ConnectionStatusEvent {
+  ConnectionStatusEvent({required this.device, required this.status});
+  final Device device;
+  final ConnectionStatus status;
 }

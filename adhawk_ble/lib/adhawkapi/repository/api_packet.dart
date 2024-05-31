@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
+import '../../utilities/struct.dart';
 import '../models/api.dart';
-import 'struct.dart';
 
 /// Ack Codes
 enum AckCode {
@@ -30,7 +30,8 @@ enum AckCode {
   const AckCode(this.value, this.message);
 
   factory AckCode.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching ackcode: $value'));
   }
 
   final int value;
@@ -55,6 +56,7 @@ enum PacketType {
   calibrationAbort(0x83),
   calibrationRegistration(0x84),
   trackerState(0x90),
+  blobSize(0x92),
   propertyGet(0x9a),
   propertySet(0x9b),
   systemControl(0x9c),
@@ -63,7 +65,8 @@ enum PacketType {
 
   const PacketType(this.value);
   factory PacketType.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching packet type: $value'));
   }
   bool get isStream => value < 0x80;
   final int value;
@@ -79,7 +82,8 @@ enum PropertyTypes {
 
   const PropertyTypes(this.value);
   factory PropertyTypes.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching property type: $value'));
   }
   final int value;
 }
@@ -91,7 +95,9 @@ enum SystemControlTypes {
 
   const SystemControlTypes(this.value);
   factory SystemControlTypes.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () =>
+            throw Exception('No matching system control type: $value'));
   }
   final int value;
 }
@@ -105,7 +111,8 @@ enum SystemInfoTypes {
 
   const SystemInfoTypes(this.value);
   factory SystemInfoTypes.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching system info type: $value'));
   }
   final int value;
 }
@@ -123,10 +130,11 @@ enum StreamTypes {
 
   const StreamTypes(this.value);
   factory StreamTypes.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching stream type: $value'));
   }
   static List<StreamTypes> fromMask(int mask) {
-    List<StreamTypes> streamTypes = [];
+    final streamTypes = <StreamTypes>[];
     for (final stream in values) {
       if (mask & (1 << stream.value) != 0) {
         streamTypes.add(stream);
@@ -138,7 +146,7 @@ enum StreamTypes {
   int get mask => 1 << value;
 
   static int createMask(Set<StreamTypes> streams) {
-    int mask = 0;
+    var mask = 0;
     for (final stream in streams) {
       mask |= stream.mask;
     }
@@ -153,11 +161,18 @@ enum EventTypes {
   blink(1),
   eyeClosed(2),
   eyeOpened(3),
+  tracklossStart(4),
+  tracklossEnd(5),
+  saccade(6),
+  saccadeStart(7),
+  saccadeEnd(8),
+  depth(14),
   ;
 
   const EventTypes(this.value);
   factory EventTypes.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching event type: $value'));
   }
   final int value;
 }
@@ -165,21 +180,32 @@ enum EventTypes {
 enum EventControlBit {
   blink(0),
   eyeCloseOpen(1),
+  saccade(3),
+  saccadeEnd(4),
   ;
 
   const EventControlBit(this.value);
   factory EventControlBit.from(int value) {
-    return values.firstWhere((element) => value == element.value);
+    return values.firstWhere((element) => value == element.value,
+        orElse: () => throw Exception('No matching event control bit: $value'));
   }
   int get mask => 1 << value;
   static int createMask(Set<EventControlBit> controls) {
-    int mask = 0;
+    var mask = 0;
     for (final control in controls) {
       mask |= control.mask;
     }
     return mask;
   }
 
+  final int value;
+}
+
+enum BlobType {
+  personalization(10),
+  ;
+
+  const BlobType(this.value);
   final int value;
 }
 
@@ -292,45 +318,51 @@ class IMUQuaternionPacket {
 
 class EyeTrackingPacket {
   static EyeTrackingData decode(Uint8List bytes) {
-    var offset = _offsetStruct.size;
-    var etData = EyeTrackingData();
+    var offset = _timestampStruct.size;
+    final timestamp = _timestampStruct.unpackFrom(bytes)[0] as int;
+    final mask = _maskStruct.unpackFrom(bytes, offset)[0] as int;
+    if (mask < 3) {
+      throw const FormatException('Eye tracking packet is in monocular format');
+    }
+    offset += 1;
+    final etData = EyeTrackingData();
     while (offset < bytes.length) {
-      var unpacked = _streamTypeStruct.unpackFrom(bytes, offset);
-      var streamType = StreamTypes.from(unpacked[0] as int);
+      final unpacked = _streamTypeStruct.unpackFrom(bytes, offset);
+      final streamType = StreamTypes.from(unpacked[0] as int);
       offset += 1;
-      var sublist = Uint8List.sublistView(bytes, offset);
+      final sublist = Uint8List.sublistView(bytes, offset);
       switch (streamType) {
         case StreamTypes.gaze:
-          etData.gaze = GazePacket.decode(sublist);
+          etData.gaze = GazePacket.decode(sublist)..timestamp = timestamp;
           offset += GazePacket.size;
-          break;
         case StreamTypes.perEyeGaze:
-          etData.perEyeGaze = PerEyeGazePacket.decode(sublist);
+          etData.perEyeGaze = PerEyeGazePacket.decode(sublist)
+            ..timestamp = timestamp;
           offset += PerEyeGazePacket.size;
-          break;
         case StreamTypes.eyeCenter:
-          etData.eyeCenter = EyeCenterPacket.decode(sublist);
+          etData.eyeCenter = EyeCenterPacket.decode(sublist)
+            ..timestamp = timestamp;
           offset += EyeCenterPacket.size;
-          break;
         case StreamTypes.pupilPosition:
-          etData.pupilPosition = PupilPositionPacket.decode(sublist);
+          etData.pupilPosition = PupilPositionPacket.decode(sublist)
+            ..timestamp = timestamp;
           offset += PupilPositionPacket.size;
-          break;
         case StreamTypes.pupilDiameter:
-          etData.pupilDiameter = PupilDiameterPacket.decode(sublist);
+          etData.pupilDiameter = PupilDiameterPacket.decode(sublist)
+            ..timestamp = timestamp;
           offset += PupilDiameterPacket.size;
-          break;
         case StreamTypes.imuQuaternion:
-          etData.imuQuaternion = IMUQuaternionPacket.decode(sublist);
+          etData.imuQuaternion = IMUQuaternionPacket.decode(sublist)
+            ..timestamp = timestamp;
           offset += IMUQuaternionPacket.size;
-          break;
       }
     }
     return etData;
   }
 
   /// Format of the initial part of the packet (timestamp, mask)
-  static final _offsetStruct = Struct('<QB');
+  static final _timestampStruct = Struct('<Q');
+  static final _maskStruct = Struct('<B');
   static final _streamTypeStruct = Struct('<B');
 }
 
@@ -338,7 +370,7 @@ class BlinkPacket {
   static int get size => _struct.size;
 
   static BlinkEvent decode(Uint8List bytes) {
-    var unpacked = _struct.unpackFrom(bytes);
+    final unpacked = _struct.unpackFrom(bytes);
     return BlinkEvent(
       timestamp: unpacked[0] as double,
       duration: unpacked[1] as double,
@@ -353,7 +385,7 @@ class EyeOpenedPacket {
   static int get size => _struct.size;
 
   static EyeClosedOpenedEvent decode(Uint8List bytes) {
-    var unpacked = _struct.unpackFrom(bytes);
+    final unpacked = _struct.unpackFrom(bytes);
     return EyeClosedOpenedEvent(
       eye: Eye.from(unpacked[1] as int),
       opened: true,
@@ -368,7 +400,7 @@ class EyeClosedPacket {
   static int get size => _struct.size;
 
   static EyeClosedOpenedEvent decode(Uint8List bytes) {
-    var unpacked = _struct.unpackFrom(bytes);
+    final unpacked = _struct.unpackFrom(bytes);
     return EyeClosedOpenedEvent(
       eye: Eye.from(unpacked[1] as int),
       opened: false,
@@ -379,13 +411,104 @@ class EyeClosedPacket {
   static final _struct = Struct('<fB');
 }
 
+class SaccadePacket {
+  static int get size => _struct.size;
+
+  static SaccadeEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return SaccadeEvent(
+      timestamp: unpacked[0] as double,
+      duration: unpacked[1] as double,
+      amplitude: unpacked[2] as double,
+      angle: unpacked[3] as double,
+      peakAngularVelocity: unpacked[4] as double,
+    );
+  }
+
+  static final _struct = Struct('<5f');
+}
+
+class SaccadeStartPacket {
+  static int get size => _struct.size;
+
+  static SaccadeStartEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return SaccadeStartEvent(
+      timestamp: unpacked[0] as double,
+      eye: Eye.from(unpacked[1] as int),
+    );
+  }
+
+  static final _struct = Struct('<fB');
+}
+
+class SaccadeEndPacket {
+  static int get size => _struct.size;
+
+  static SaccadeEndEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return SaccadeEndEvent(
+      timestamp: unpacked[0] as double,
+      eye: Eye.from(unpacked[1] as int),
+      duration: unpacked[2] as double,
+      amplitude: unpacked[3] as double,
+      angle: unpacked[4] as double,
+      peakAngularVelocity: unpacked[5] as double,
+    );
+  }
+
+  static final _struct = Struct('<fB4f');
+}
+
+class TracklossStartPacket {
+  static int get size => _struct.size;
+
+  static TracklossStartEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return TracklossStartEvent(
+      timestamp: unpacked[0] as double,
+      eye: Eye.from(unpacked[1] as int),
+    );
+  }
+
+  static final _struct = Struct('<fB');
+}
+
+class TracklossEndPacket {
+  static int get size => _struct.size;
+
+  static TracklossEndEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return TracklossEndEvent(
+      timestamp: unpacked[0] as double,
+      eye: Eye.from(unpacked[1] as int),
+    );
+  }
+
+  static final _struct = Struct('<fB');
+}
+
+class DepthPacket {
+  static int get size => _struct.size;
+
+  static DepthEvent decode(Uint8List bytes) {
+    final unpacked = _struct.unpackFrom(bytes);
+    return DepthEvent(
+      timestamp: unpacked[0] as double,
+      depth: unpacked[1] as double,
+    );
+  }
+
+  static final _struct = Struct('<2f');
+}
+
 class EventPacket {
   static EventData decode(Uint8List bytes) {
-    int offset = 0;
-    var unpacked = _eventTypeStruct.unpackFrom(bytes, offset);
-    var eventType = EventTypes.from(unpacked[0] as int);
+    var offset = 0;
+    final unpacked = _eventTypeStruct.unpackFrom(bytes, offset);
+    final eventType = EventTypes.from(unpacked[0] as int);
     offset += _eventTypeStruct.size;
-    var sublist = Uint8List.sublistView(bytes, offset);
+    final sublist = Uint8List.sublistView(bytes, offset);
     switch (eventType) {
       case EventTypes.blink:
         return BlinkPacket.decode(sublist);
@@ -393,6 +516,18 @@ class EventPacket {
         return EyeClosedPacket.decode(sublist);
       case EventTypes.eyeOpened:
         return EyeOpenedPacket.decode(sublist);
+      case EventTypes.saccade:
+        return SaccadePacket.decode(sublist);
+      case EventTypes.saccadeStart:
+        return SaccadeStartPacket.decode(sublist);
+      case EventTypes.saccadeEnd:
+        return SaccadeEndPacket.decode(sublist);
+      case EventTypes.tracklossStart:
+        return TracklossStartPacket.decode(sublist);
+      case EventTypes.tracklossEnd:
+        return TracklossEndPacket.decode(sublist);
+      case EventTypes.depth:
+        return DepthPacket.decode(sublist);
     }
   }
 
@@ -401,12 +536,12 @@ class EventPacket {
 
 class SystemInfoPacket {
   static String decode(Uint8List bytes) {
-    int offset = 0;
-    var unpacked = _infoTypeStruct.unpackFrom(bytes, offset);
-    var infoType = SystemInfoTypes.from(unpacked[0] as int);
+    var offset = 0;
+    final unpacked = _infoTypeStruct.unpackFrom(bytes, offset);
+    final infoType = SystemInfoTypes.from(unpacked[0] as int);
     offset += _infoTypeStruct.size;
-    var end = bytes.indexOf(0, offset); // find the null terminator
-    var sublist = Uint8List.sublistView(bytes, offset, end);
+    final end = bytes.indexOf(0, offset); // find the null terminator
+    final sublist = Uint8List.sublistView(bytes, offset, end);
     switch (infoType) {
       case SystemInfoTypes.deviceSerial:
       case SystemInfoTypes.firmwareApi:

@@ -1,3 +1,4 @@
+import 'package:adhawk_ble_example/ui/pages/personalization_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,6 +10,7 @@ enum NamedRoutes {
   login('login'),
   home('home'),
   connect('connect'),
+  personalization('personalization'),
   calibrationInstruction('calibrationInstruction'),
   calibrate('calibrate'),
   logs('logs'),
@@ -35,6 +37,11 @@ GoRouter routeBuilder() => GoRouter(
               path: 'connect',
               builder: (BuildContext context, GoRouterState state) =>
                   const ConnectPage(),
+            ),
+            GoRoute(
+              name: NamedRoutes.personalization.value,
+              path: 'personalization',
+              builder: (context, state) => const PersonalizationPage(),
             ),
             GoRoute(
               name: NamedRoutes.calibrationInstruction.value,

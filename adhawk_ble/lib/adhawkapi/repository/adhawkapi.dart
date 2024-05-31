@@ -5,15 +5,25 @@ import 'package:flutter/foundation.dart';
 import 'package:retry/retry.dart';
 
 import '../../bluetooth/models/bluetooth_characteristics.dart';
+import '../../bluetooth/repository/bluetooth_api.dart';
 import '../../bluetooth/repository/bluetooth_repository.dart';
 import '../../logging/logging.dart';
+import '../../utilities/formatters.dart';
 import '../models/api.dart';
 import 'api_packet.dart';
 import 'packet.dart';
-import 'struct.dart';
 
-class AdhawkApiException implements Exception {
-  AdhawkApiException(this.packet);
+class TrackerException implements Exception {
+  TrackerException(this.message);
+
+  @override
+  String toString() => message;
+
+  String message;
+}
+
+class RequestFailedException extends TrackerException {
+  RequestFailedException(this.packet) : super(packet.ackCode.toString());
 
   @override
   String toString() {
@@ -21,6 +31,19 @@ class AdhawkApiException implements Exception {
   }
 
   final ResponsePacket packet;
+}
+
+class RequestTimeoutException extends TrackerException {
+  RequestTimeoutException(super.message);
+}
+
+class CommsException implements Exception {
+  CommsException(this.message);
+
+  @override
+  String toString() => message;
+
+  String message;
 }
 
 class AdHawkApi {
@@ -45,25 +68,29 @@ class AdHawkApi {
   Future<void> start() async {
     _logger.info('Initializing adhawkapi');
 
-    _responseStreamSub = await deviceRepo
-        .startStream(AdhawkCharacteristics.command.characteristic)
-        .then((stream) => stream.listen(_handleResponsePackets),
-            onError: (error) => _logger.severe(error.toString()));
+    try {
+      _responseStreamSub = await deviceRepo
+          .startStream(AdhawkCharacteristics.command.characteristic)
+          .then((stream) => stream.listen(_handleResponsePackets),
+              onError: (error) => _logger.severe(error.toString()));
 
-    _etStreamSub = await deviceRepo
-        .startStream(AdhawkCharacteristics.eyetrackingStream.characteristic)
-        .then((stream) => stream.listen(_handleEyetrackingStream),
-            onError: (error) => _logger.warning(error.toString()));
+      _etStreamSub = await deviceRepo
+          .startStream(AdhawkCharacteristics.eyetrackingStream.characteristic)
+          .then((stream) => stream.listen(_handleEyetrackingStream),
+              onError: (error) => _logger.warning(error.toString()));
 
-    _eventStreamSub = await deviceRepo
-        .startStream(AdhawkCharacteristics.eventStream.characteristic)
-        .then((stream) => stream.listen(_handleEventStream),
-            onError: (error) => _logger.warning(error.toString()));
+      _eventStreamSub = await deviceRepo
+          .startStream(AdhawkCharacteristics.eventStream.characteristic)
+          .then((stream) => stream.listen(_handleEventStream),
+              onError: (error) => _logger.warning(error.toString()));
 
-    _trackerStatusSub = await deviceRepo
-        .startStream(AdhawkCharacteristics.statusStream.characteristic)
-        .then((stream) => stream.listen(_handleStatusStream),
-            onError: (error) => _logger.warning(error.toString()));
+      _trackerStatusSub = await deviceRepo
+          .startStream(AdhawkCharacteristics.statusStream.characteristic)
+          .then((stream) => stream.listen(_handleStatusStream),
+              onError: (error) => _logger.warning(error.toString()));
+    } on BluetoothCommsException catch (e) {
+      throw CommsException(e.message);
+    }
   }
 
   Stream<EyeTrackingData> get etData async* {
@@ -96,88 +123,97 @@ class AdHawkApi {
     await _rawPktController.close();
   }
 
-  Future<ResponsePacket> setTracking(bool start) async {
-    var request = RequestPacket(
+  Future<ResponsePacket> setTracking({required bool track}) async {
+    final request = RequestPacket(
       PacketType.systemControl,
       '<2B',
-      [SystemControlTypes.tracking.value, start ? 1 : 0],
+      [SystemControlTypes.tracking.value, track ? 1 : 0],
     );
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
   }
 
   // Get tracker state
   Future<ResponsePacket> getTrackerState() async {
-    var request = RequestPacket(PacketType.trackerState);
-    return await _sendRequestPacket(request);
+    final request = RequestPacket(PacketType.trackerState);
+    return _sendRequestPacket(request);
   }
 
   // Get system information state
   Future<ResponsePacket> getSystemInformation(
       SystemInfoTypes systemInfoType) async {
-    var request = RequestPacket(
+    final request = RequestPacket(
       PacketType.systemInfo,
       '<B',
       [systemInfoType.value],
     );
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
   }
 
   /// Enable eyetracking streams
-  Future<ResponsePacket> setEyetrackingStreams(
-      Set<StreamTypes> streamTypes, bool enable) async {
-    int mask = StreamTypes.createMask(streamTypes);
-    var request = RequestPacket(
+  Future<ResponsePacket> setEyetrackingStreams({
+    required Set<StreamTypes> streamTypes,
+    required bool enable,
+  }) async {
+    final mask = StreamTypes.createMask(streamTypes);
+    final request = RequestPacket(
       PacketType.propertySet,
       '<BLB',
       [PropertyTypes.eyetrackingStreams.value, mask, enable ? 1 : 0],
     );
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
   }
 
   /// Set the eyetracking rate
   Future<ResponsePacket> setEyetrackingRate(double rate) async {
-    var request = RequestPacket(
+    final request = RequestPacket(
       PacketType.propertySet,
       '<Bf',
       [PropertyTypes.eyetrackingRate.value, rate],
     );
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
   }
 
   /// Enable event streams
-  Future<ResponsePacket> setEvents(
-      Set<EventControlBit> controlTypes, bool enable) async {
-    int mask = EventControlBit.createMask(controlTypes);
-    var request = RequestPacket(
+  Future<ResponsePacket> setEvents({
+    required Set<EventControlBit> eventTypes,
+    required bool enable,
+  }) async {
+    final mask = EventControlBit.createMask(eventTypes);
+    final request = RequestPacket(
       PacketType.propertySet,
       '<BLB',
       [PropertyTypes.eventControl.value, mask, enable ? 1 : 0],
     );
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
   }
 
   /// Trigger an autotune
-  Future<ResponsePacket> autotune() async {
-    var request = RequestPacket(PacketType.triggerAutotune);
-    ResponsePacket response;
-    bool trackerReady = false;
+  Future<void> autotune() async {
+    final request = RequestPacket(PacketType.triggerAutotune);
+    return waitForTrackerReady(() async => _sendRequestPacket(request));
+  }
+
+  Future<void> waitForTrackerReady(
+    Future<void> Function() callback, {
+    Duration duration = const Duration(seconds: 5),
+  }) async {
+    var trackerReady = false;
     final sub = _trackerStatusController.stream.listen(
       (event) => trackerReady = true,
     );
     try {
-      response = await _sendRequestPacket(request);
+      await callback();
       await retry(
           () => {
                 if (!trackerReady)
-                  throw TimeoutException('Tracker is not ready'),
+                  throw RequestTimeoutException('Tracker is not ready'),
               },
-          retryIf: (e) => e is TimeoutException,
+          retryIf: (e) => e is RequestTimeoutException,
           onRetry: (e) => _logger.finer('Waiting for tracker ready'),
-          maxDelay: const Duration(seconds: 5));
+          maxDelay: duration);
     } finally {
-      sub.cancel();
+      await sub.cancel();
     }
-    return response;
   }
 
   /// Trigger a single point calibration
@@ -187,42 +223,67 @@ class AdHawkApi {
     request = RequestPacket(
       PacketType.calibrationRegistration,
       '<3f',
-      [0.0, 0.0, -1000.0],
+      [0.0, 0.0, -1.0],
     );
     await _sendRequestPacket(request);
     request = RequestPacket(PacketType.calibrationComplete);
-    return await _sendRequestPacket(request);
+    return _sendRequestPacket(request);
+  }
+
+  /// Clear the blob
+  Future<ResponsePacket> clearBlob(BlobType blobType) async {
+    final request = RequestPacket(
+      PacketType.blobSize,
+      '<BH',
+      [blobType.value, 0],
+    );
+    return _sendRequestPacket(request);
   }
 
   /// Send request packets to the command characteristic
+  ///
+  /// Throws [CommsException] if we're unable to communicate with the device
+  /// Throws [TrackerException] if the reponse ack code is an error
+  /// or the request times out
   Future<ResponsePacket> _sendRequestPacket(RequestPacket request) async {
-    var bytes = request.encode();
-    _logger.fine('[TX] $request (${Struct.toHexString(bytes)})');
-    await deviceRepo.write(
-      AdhawkCharacteristics.command.characteristic,
-      bytes,
-    );
-    var responsePacket = await _waitForResponse(request);
+    final bytes = request.encode();
+    _logger.fine('[TX] $request (${bytes.toHexString()})');
+    try {
+      await deviceRepo.write(
+        AdhawkCharacteristics.command.characteristic,
+        bytes,
+      );
+    } on BluetoothCommsException catch (e) {
+      throw CommsException(e.message);
+    }
+
+    final responsePacket = await _waitForResponse(request);
     if (responsePacket.ackCode != AckCode.success) {
-      throw AdhawkApiException(responsePacket);
+      _logger.severe('[RX] $request ${responsePacket.ackCode}');
+      throw RequestFailedException(responsePacket);
     }
     return responsePacket;
   }
 
   /// Handle response packets and put them on a queue
   void _handleResponsePackets(Uint8List bytes) {
-    var response = ResponsePacket.fromBytes(bytes);
-    _logger.fine('[RX] $response');
-    _responseQueue[response.requestId] = response;
+    try {
+      final response = ResponsePacket.fromBytes(bytes);
+      _logger.fine('[RX] $response');
+      _responseQueue[response.requestId] = response;
+    } on Exception catch (e) {
+      _logger.severe('$e ${bytes.toHexString()}');
+    }
   }
 
   /// Check the response queue for responses that match the request ID
+  /// Throws [RequestTimeoutException] if no response was received
   Future<ResponsePacket> _waitForResponse(RequestPacket request) async {
-    return await retry(
+    return retry(
       () {
-        ResponsePacket? response = _responseQueue[request.requestId];
+        final response = _responseQueue[request.requestId];
         if (response == null) {
-          throw TimeoutException('No response for $request');
+          throw RequestTimeoutException('No response for $request');
         }
         _responseQueue.remove(request.requestId);
         _logger.finer('[AK] $response');
@@ -232,49 +293,62 @@ class AdHawkApi {
       // 50 + 100 + 200 + 400 + 800 + 1600 + 3200 + 6400 = 12,750ms
       delayFactor: const Duration(milliseconds: 50),
       maxAttempts: 8,
-      retryIf: (e) => e is TimeoutException,
+      retryIf: (e) => e is RequestTimeoutException,
       onRetry: (e) => _logger.finer('Waiting for $request'),
     );
   }
 
   /// Handle eyetracking stream packets
   void _handleEyetrackingStream(Uint8List bytes) {
-    int offset = 0;
+    var offset = 0;
     while (offset < bytes.length) {
-      var packet = StreamPacket.fromBytes(Uint8List.sublistView(bytes, offset));
-      var etData = EyeTrackingPacket.decode(packet.payload);
-      _rawPktController.add(packet);
-      _etController.add(etData);
-      offset += packet.length;
+      try {
+        final packet =
+            StreamPacket.fromBytes(Uint8List.sublistView(bytes, offset));
+        final etData = EyeTrackingPacket.decode(packet.payload);
+        _rawPktController.add(packet);
+        _etController.add(etData);
+        offset += packet.length;
+      } on Exception catch (e) {
+        _logger.finest('$e ${bytes.toHexString()}');
+        break;
+      }
     }
   }
 
   /// Handle event stream packets
   void _handleEventStream(Uint8List bytes) {
-    int offset = 0;
+    var offset = 0;
     while (offset < bytes.length) {
-      var packet = StreamPacket.fromBytes(Uint8List.sublistView(bytes, offset));
-      var event = EventPacket.decode(packet.payload);
-      _rawPktController.add(packet);
-      _eventController.add(event);
-      offset += packet.length;
+      try {
+        final packet =
+            StreamPacket.fromBytes(Uint8List.sublistView(bytes, offset));
+        final event = EventPacket.decode(packet.payload);
+        _rawPktController.add(packet);
+        _eventController.add(event);
+        offset += packet.length;
+      } on Exception catch (e) {
+        _logger.finest('$e ${bytes.toHexString()}');
+        break;
+      }
     }
   }
 
   /// Handle status stream packets
   void _handleStatusStream(Uint8List bytes) {
-    int offset = 0;
+    var offset = 0;
     while (offset < bytes.length) {
       try {
-        var packet =
+        final packet =
             StreamPacket.fromBytes(Uint8List.sublistView(bytes, offset));
         if (packet.packetType == PacketType.trackerReady) {
           _logger.info('Tracker Ready');
           _trackerStatusController.add(AckCode.success);
           offset += 1;
         }
-      } catch (e) {
-        _logger.info('Unhandled packet: $e');
+      } on Exception catch (e) {
+        _logger.finest('$e ${bytes.toHexString()}');
+        break;
       }
     }
   }
